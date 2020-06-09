@@ -31,6 +31,83 @@ describe("flow analysis with is", function()
          end
       ]])
 
+      it("resolves for tagged records", util.check [[
+         local R = record
+            tag foo: string
+         end
+         local R1 = record is R with foo = "aaa"
+            a: number
+         end
+         local R2 = record is R with foo = "bbb"
+            b: number
+         end
+         local r: R1 | R2
+         if r is R1 then
+            print(r.a)
+         else
+            print(r.b)
+         end
+      ]])
+
+      it("catches errors for tagged records", util.check_type_error([[
+         local R = record
+            tag foo: string
+         end
+         local R1 = record is R with foo = "aaa"
+            a: number
+         end
+         local R2 = record is R with foo = "bbb"
+            b: number
+         end
+         local r: R1 | R2
+         if r is R1 then
+            print(r.b) -- inverted!
+         else
+            print(r.a) -- inverted!
+         end
+      ]], {
+         { msg = "invalid key 'b' in record 'r' of type R1" },
+         { msg = "invalid key 'a' in record 'r' of type R2" },
+      }))
+
+      it("resolves tagged records without a union", util.check [[
+         local R = record
+            tag foo: string
+         end
+         local R1 = record is R with foo = "aaa"
+            a: number
+         end
+         local R2 = record is R with foo = "bbb"
+            b: number
+         end
+         local r: R
+         if r is R1 then
+            print(r.a)
+         else
+            print(r.foo)
+         end
+      ]])
+
+      it("catches errors tagged records without a union", util.check_type_error([[
+         local R = record
+            tag foo: string
+         end
+         local R1 = record is R with foo = "aaa"
+            a: number
+         end
+         local R2 = record is R with foo = "bbb"
+            b: number
+         end
+         local r: R
+         if r is R1 then
+            print(r.a)
+         else
+            print(r.b)
+         end
+      ]], {
+         { msg = "invalid key 'b' in record 'r' of type R" },
+      }))
+
       it("negates with not", util.check [[
          local t: number | string
          if not t is number then
@@ -181,13 +258,13 @@ describe("flow analysis with is", function()
 
    describe("code gen", function()
       describe("limitations", function()
-         it("cannot discriminate a union between multiple table types", util.check_type_error([[
+         it("cannot discriminate a union between untagged table types", util.check_type_error([[
             local t: {number} | {string}
             if t is {number} then
                print(t)
             end
          ]], {
-            { y = 1, msg = [[cannot discriminate a union between multiple table types: {number} | {string}]] },
+            { y = 1, msg = [[cannot discriminate a union between untagged table types: {number} | {string}]] },
          }))
 
          it("cannot discriminate a union between records", util.check_type_error([[
@@ -199,7 +276,35 @@ describe("flow analysis with is", function()
             end
             local t: R1 | R2
          ]], {
-            { y = 7, msg = [[cannot discriminate a union between multiple table types: R1 | R2]] },
+            { y = 7, msg = [[cannot discriminate a union between untagged table types: R1 | R2]] },
+         }))
+
+         it("can discriminate a union between tagged records", util.check [[
+            local R = record
+               tag foo: string
+            end
+            local R1 = record is R with foo = "aaa"
+               a: number
+            end
+            local R2 = record is R with foo = "bbb"
+               b: number
+            end
+            local t: R1 | R2
+         ]])
+
+         it("cannot discriminate a union with tagged records and untagged table types", util.check_type_error([[
+            local R = record
+               tag foo: string
+            end
+            local R1 = record is R with foo = "aaa"
+               a: number
+            end
+            local R2 = record is R with foo = "bbb"
+               b: number
+            end
+            local t: R1 | R2 | R
+         ]], {
+            { y = 10, msg = [[cannot discriminate a union between untagged table types: R1 | R2]] },
          }))
 
          it("cannot discriminate a union between multiple string/enum types", util.check_type_error([[
@@ -262,6 +367,42 @@ describe("flow analysis with is", function()
                print(t + 1)
             elseif type(t) == "table" or type(t) == "boolean" then
                print(t)
+            end
+         end
+      ]]))
+
+      it("generates type checks for tagged records", util.gen([[
+         local R = record
+            tag foo: string
+         end
+         local R1 = record is R with foo = "aaa"
+            a: number
+         end
+         local R2 = record is R with foo = "bbb"
+            b: number
+         end
+         function process(r: R1 | R2)
+            if r is R1 then
+               print(r.a)
+            elseif r is R2 then
+               print(r.b)
+            end
+         end
+      ]], [[
+         local R = {}
+
+
+         local R1 = {}
+
+
+         local R2 = {}
+
+
+         function process(r)
+            if r.foo == "aaa" then
+               print(r.a)
+            elseif r.foo == "bbb" then
+               print(r.b)
             end
          end
       ]]))

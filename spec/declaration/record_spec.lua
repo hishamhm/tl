@@ -245,3 +245,154 @@ describe("records", function()
    end)
 
 end)
+
+describe("tagged records", function()
+   it("can have tags", util.check [[
+      local Node = record
+         tag kind: string
+      end
+   ]])
+
+   it("can have subtypes", util.check [[
+      local Node = record
+         tag kind: string
+      end
+
+      local EnumNode = record is Node with kind = "enum"
+         enumset: {string}
+      end
+   ]])
+
+   it("can have enums as tags", util.check [[
+      local NodeKind = enum
+         "t1"
+         "t2"
+      end
+
+      local Node = record
+         tag kind: NodeKind
+      end
+
+      local T1Node = record is Node with kind = "t1"
+         t1data: {string}
+      end
+
+      local T2Node = record is Node with kind = "t2"
+         t2data: {string}
+      end
+   ]])
+
+   it("enums as tags must be valid", util.check_type_error([[
+      local NodeKind = enum
+         "t1"
+         "t2"
+      end
+
+      local Node = record
+         tag kind: NodeKind
+      end
+
+      local T1Node = record is Node with kind = "t1"
+         t1data: {string}
+      end
+
+      local T2Node = record is Node with kind = "t3" -- invalid!
+         t2data: {string}
+      end
+   ]], {
+      { msg = "string \"t3\" is not a member of NodeKind" }
+   }))
+
+   it("subtypes must have tag declarations", util.check_syntax_error([[
+      local Node = record
+         tag kind: string
+      end
+
+      local EnumNode = record is Node
+         enumset: {string}
+      end
+   ]], {
+      { msg = "expected 'with'" },
+   }))
+
+   it("subtype tags can be strings, numbers or booleans", util.check [[
+      local WithString = record
+         tag kind: string
+      end
+
+      local SubString = record is WithString with kind = "enum"
+         enumset: {string}
+      end
+
+      local WithNumber = record
+         tag kind: number
+      end
+
+      local SubNumber = record is WithNumber with kind = 1
+         enumset: {string}
+      end
+
+      local WithBoolean = record
+         tag kind: boolean
+      end
+
+      local SubBoolean = record is WithBoolean with kind = true
+         enumset: {string}
+      end
+   ]])
+
+   it("subtypes cannot be other literals", util.check_syntax_error([[
+      local Node = record
+         tag kind: string
+      end
+
+      local EnumNode = record is Node with kind = {}
+         enumset: {string}
+      end
+
+      local EnumNode = record is Node with kind = function() end
+         enumset: {string}
+      end
+   ]], {
+      { msg = "invalid literal for tag value" },
+      { msg = "invalid literal for tag value" },
+   }))
+
+   it("detects an unknown parent type", util.check_type_error([[
+      local Node = record
+         tag kind: string
+      end
+
+      local EnumNode = record is Bla with kind = "enum"
+         enumset: {string}
+      end
+   ]], {
+      { msg = "unknown type Bla" },
+   }))
+
+   it("detects an invalid tag", util.check_type_error([[
+      local Node = record
+         tag kind: string
+      end
+
+      local EnumNode = record is Node with typename = "enum"
+         enumset: {string}
+      end
+   ]], {
+      { msg = "invalid tag 'typename', expected 'kind'" },
+   }))
+
+   it("detects an invalid tag value", util.check_type_error([[
+      local Node = record
+         tag kind: string
+      end
+
+      local EnumNode = record is Node with kind = 123
+         enumset: {string}
+      end
+   ]], {
+      { msg = "got number, expected string" },
+   }))
+
+end)
+

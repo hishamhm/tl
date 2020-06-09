@@ -785,6 +785,10 @@ local Type = {}
 
 
 
+
+
+
+
 local Operator = {}
 
 
@@ -916,6 +920,7 @@ local Node = {}
 
 
 
+
 local function is_array_type(t)
    return t.typename == "array" or t.typename == "arrayrecord"
 end
@@ -955,7 +960,7 @@ end
 
 local function verify_tk(ps, i, tk)
    if ps.tokens[i].tk == tk then
-      return i + 1
+      return i + 1, true
    end
    return fail(ps, i, "syntax error, expected '" .. tk .. "'")
 end
@@ -1356,9 +1361,15 @@ local function parse_literal(ps, i)
       node.constnum = n
       return i, node
    elseif ps.tokens[i].tk == "true" then
-      return verify_kind(ps, i, "keyword", "boolean")
+      local node
+      i, node = verify_kind(ps, i, "keyword", "boolean")
+      node.constbool = true
+      return i, node
    elseif ps.tokens[i].tk == "false" then
-      return verify_kind(ps, i, "keyword", "boolean")
+      local node
+      i, node = verify_kind(ps, i, "keyword", "boolean")
+      node.constbool = false
+      return i, node
    elseif ps.tokens[i].tk == "nil" then
       return verify_kind(ps, i, "keyword", "nil")
    elseif ps.tokens[i].tk == "function" then
@@ -1803,6 +1814,36 @@ local function parse_return(ps, i)
    return i, node
 end
 
+local function parse_record_tag_declaration(ps, i, def)
+   local v
+   i, v = verify_kind(ps, i, "identifier", "variable")
+   if not v then
+      return fail(ps, i, "expected a record type name")
+   end
+   def.parent_record = new_type(ps, i, "nominal")
+   def.parent_record.names = { v.tk }
+
+   local ok
+   i, ok = verify_tk(ps, i, "with")
+   if not ok then
+      return i - 1
+   end
+   i, v = verify_kind(ps, i, "identifier", "variable")
+   if not v then
+      return fail(ps, i, "expected a tag field name")
+   end
+   def.tag_field = v.tk
+   i = verify_tk(ps, i, "=")
+   local lit_i = i
+   i, v = parse_literal(ps, i)
+   if v.kind ~= "string" and v.kind ~= "number" and v.kind ~= "boolean" then
+      fail(ps, lit_i, "invalid literal for tag value")
+      return i
+   end
+   def.tag_value = v
+   return i
+end
+
 parse_newtype = function(ps, i)
    local node = new_node(ps.tokens, i, "newtype")
    node.newtype = new_type(ps, i, "typetype")
@@ -1814,6 +1855,10 @@ parse_newtype = function(ps, i)
       i = i + 1
       if ps.tokens[i].tk == "<" then
          i, def.typeargs = parse_typearg_list(ps, i)
+      end
+      if ps.tokens[i].tk == "is" then
+         i = i + 1
+         i = parse_record_tag_declaration(ps, i, def)
       end
       while not ((not ps.tokens[i]) or ps.tokens[i].tk == "end") do
          if ps.tokens[i].tk == "{" then
@@ -1832,6 +1877,14 @@ parse_newtype = function(ps, i)
             def.typename = "arrayrecord"
             def.elements = t
          else
+            local is_tag = false
+            if ps.tokens[i].tk == "tag" and ps.tokens[i].kind == "identifier" then
+               if def.tag_field then
+                  return fail(ps, i, "cannot declare record tag multiple times")
+               end
+               i = i + 1
+               is_tag = true
+            end
             local v
             i, v = verify_kind(ps, i, "identifier", "variable")
             local iv = i
@@ -1848,6 +1901,9 @@ parse_newtype = function(ps, i)
                if not def.fields[v.tk] then
                   def.fields[v.tk] = t
                   table.insert(def.field_order, v.tk)
+                  if is_tag then
+                     def.tag_field = v.tk
+                  end
                else
                   local prev_t = def.fields[v.tk]
                   if t.typename == "function" and prev_t.typename == "function" then
@@ -1860,6 +1916,9 @@ parse_newtype = function(ps, i)
                   end
                end
             elseif ps.tokens[i].tk == "=" then
+               if is_tag then
+                  return fail(ps, i, "cannot declare record tag on a nested type")
+               end
                i = verify_tk(ps, i, "=")
                local nt
                i, nt = parse_newtype(ps, i)
@@ -2114,6 +2173,9 @@ local function recurse_type(ast, visit)
    end
    if ast.def then
       table.insert(xs, recurse_type(ast.def, visit))
+   end
+   if ast.parent_record then
+      table.insert(xs, recurse_type(ast.parent_record, visit))
    end
    if ast.keys then
       table.insert(xs, recurse_type(ast.keys, visit))
@@ -2744,11 +2806,23 @@ function tl.pretty_print_ast(ast, fast)
             elseif node.op.op == "as" then
                add_child(out, children[1], "", indent)
             elseif node.op.op == "is" then
-               table.insert(out, "type(")
-               add_child(out, children[1], "", indent)
-               table.insert(out, ") == \"")
-               add_child(out, children[3], "", indent)
-               table.insert(out, "\"")
+               if node.e1.type.tag_field then
+                  add_child(out, children[1], "", indent)
+                  table.insert(out, ".")
+                  table.insert(out, node.e1.type.tag_field)
+                  table.insert(out, " == ")
+                  local e2 = node.e2.casttype.resolved.tag_value
+                  local v = (e2.kind == "string" and string.format("%q", e2.conststr)) or
+                  (e2.kind == "number" and tostring(e2.constnum)) or
+                  (e2.kind == "boolean" and tostring(e2.constbool))
+                  table.insert(out, v)
+               else
+                  table.insert(out, "type(")
+                  add_child(out, children[1], "", indent)
+                  table.insert(out, ") == \"")
+                  add_child(out, children[3], "", indent)
+                  table.insert(out, "\"")
+               end
             elseif spaced_op[node.op.arity][node.op.op] or tight_op[node.op.arity][node.op.op] then
                local space = spaced_op[node.op.arity][node.op.op] and " " or ""
                if children[2] and node.op.prec > tonumber(children[2]) then
@@ -4362,6 +4436,12 @@ function tl.type_check(ast, opts)
       elseif t1.typename == "nominal" and t2.typename == "nominal" and #t2.names == 1 and t2.names[1] == "any" then
          return true
       elseif t1.typename == "nominal" and t2.typename == "nominal" then
+         local t1u = resolve_unary(t1)
+         local t2u = resolve_unary(t2)
+         if is_record_type(t1u) and is_record_type(t2u) and t1u.parent_record and resolve_unary(t1u.parent_record) == t2u then
+            return true
+         end
+
          if same_names(t1, t2) then
             if t1.typevals == nil and t2.typevals == nil then
                return true
@@ -4519,7 +4599,7 @@ function tl.type_check(ast, opts)
       t1 = resolve_tuple(t1)
       t2 = resolve_tuple(t2)
       if lax and (is_unknown(t1) or is_unknown(t2)) then
-         return
+         return true
       end
 
       if t2.typename == "unknown_emptytable_value" then
@@ -4540,6 +4620,8 @@ function tl.type_check(ast, opts)
 
       local match, match_errs = is_a(t1, t2)
       add_errs_prefixing(match_errs, errors, "in " .. context .. ": " .. (name and (name .. ": ") or ""), node)
+
+      return match
    end
 
    local function close_types(vars)
@@ -6180,6 +6262,39 @@ function tl.type_check(ast, opts)
       end,
    }
 
+   local function check_parent_record(typ)
+      if not typ.parent_record then
+         return
+      end
+      local pr = resolve_unary(typ.parent_record)
+      if not is_record_type(pr) then
+         type_error(typ.parent_record, "unknown type %s", typ.parent_record)
+      elseif not pr.tag_field then
+         type_error(typ, "parent record %s does not have a tag field", typ.parent_record)
+      elseif pr.tag_field ~= typ.tag_field then
+         type_error(typ, "invalid tag '" .. typ.tag_field .. "', expected '" .. pr.tag_field .. "'")
+      else
+         if not typ.tag_value.type then
+            if typ.tag_value.kind == "string" then
+               typ.tag_value.type = a_type({ typename = "string", tk = typ.tag_value.tk })
+            elseif typ.tag_value.kind == "number" then
+               typ.tag_value.type = NUMBER
+            elseif typ.tag_value.kind == "boolean" then
+               typ.tag_value.type = BOOLEAN
+            end
+         end
+         assert_is_a(typ, typ.tag_value.type, pr.fields[typ.tag_field], "tag value")
+         for _, f in ipairs(pr.field_order) do
+            if typ.fields[f] then
+               type_error(typ, "redefining existing field '" .. f .. "' from parent record")
+            else
+               typ.fields[f] = pr.fields[f]
+               table.insert(typ.field_order, f)
+            end
+         end
+      end
+   end
+
    local visit_type = {
       cbs = {
          ["string"] = {
@@ -6207,6 +6322,7 @@ function tl.type_check(ast, opts)
                end
             end,
             after = function(typ, children)
+               check_parent_record(typ)
                end_scope()
                for name, typ in pairs(typ.fields) do
                   if typ.typename == "nestedtype" then
@@ -6261,12 +6377,25 @@ function tl.type_check(ast, opts)
                local n_table_types = 0
                local n_function_types = 0
                local n_string_enum = 0
+               local all_tagged = true
+               local parent
                for _, t in ipairs(typ.types) do
                   t = resolve_unary(t)
+                  if t.tag_value then
+                     local pr = resolve_unary(t.parent_record)
+                     if parent and not same_type(pr, parent) then
+                        type_error(typ, "cannot discriminate a union between records with different parents")
+                        break
+                     end
+                     parent = pr
+                     typ.tag_field = parent.tag_field
+                  else
+                     all_tagged = false
+                  end
                   if table_types[t.typename] then
                      n_table_types = n_table_types + 1
-                     if n_table_types > 1 then
-                        type_error(typ, "cannot discriminate a union between multiple table types: %s", typ)
+                     if n_table_types > 1 and not all_tagged then
+                        type_error(typ, "cannot discriminate a union between untagged table types: %s", typ)
                         break
                      end
                   elseif t.typename == "function" then

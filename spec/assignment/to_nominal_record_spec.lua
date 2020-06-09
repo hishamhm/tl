@@ -1,4 +1,5 @@
 local tl = require("tl")
+local util = require("spec.util")
 
 describe("assignment to nominal record", function()
    it("accepts empty table", function()
@@ -87,4 +88,44 @@ describe("assignment to nominal record", function()
       local errors = tl.type_check(ast)
       assert.match("in local declaration: x: got number, expected Node", errors[1].msg, 1, true)
    end)
+end)
+
+describe("tagged records", function()
+   it("child be assigned to parent", util.check [[
+      local Node = record
+         tag kind: string
+         x: number
+         y: number
+      end
+
+      local EnumNode = record is Node with kind = "enum"
+         enumset: {string}
+      end
+
+      local e: EnumNode = {}
+      e.x = 12
+      e.y = 13
+      e.enumset = { "hello" }
+      local n: Node = e
+   ]])
+
+   it("parent cannot be assigned to child", util.check_type_error([[
+      local Node = record
+         tag kind: string
+         x: number
+         y: number
+      end
+
+      local EnumNode = record is Node with kind = "enum"
+         enumset: {string}
+      end
+
+      local n: Node = {}
+      n.x = 12
+      n.y = 13
+      local e: EnumNode
+      e = n
+   ]], {
+      { msg = "in assignment: Node is not a EnumNode" }
+   }))
 end)

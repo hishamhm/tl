@@ -195,6 +195,7 @@ local function gen(lax, code, expected)
       assert.same({}, syntax_errors, "Code was not expected to have syntax errors")
       local errors, unks = tl.type_check(ast, { filename = "foo.tl", lax = lax })
       assert.same({}, errors)
+
       local output_code = tl.pretty_print_ast(ast)
 
       local expected_tokens = tl.lex(expected)

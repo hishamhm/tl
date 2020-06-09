@@ -101,9 +101,15 @@ precedence, see below.
 
 *  typeargs ::= ‘<’ Name {‘,’ Name } ‘>’
 
-*  newtype ::= ‘record’ [typeargs] [‘{’ type ‘}’] {Name ‘=’ newtype} {Name ‘:’ type} ‘end’ |
+*  newtype ::= ‘record’ [typeargs] [‘is’ Name ‘with’ Name ‘=’ tagvalue]
+*                 [‘{’ type ‘}’]
+*                 {Name ‘=’ newtype}
+*                 { [‘tag’] Name ‘:’ type}
+*              ‘end’ |
 *      ‘enum’ {LiteralString} ‘end’ |
 *      ‘functiontype’ functiontype
+
+*  tagvalue ::= ‘false’ | ‘true’ | Numeral | LiteralString
 
 *  functiontype ::= [typeargs] ‘(’ partypelist ‘)’ [retlist]
 

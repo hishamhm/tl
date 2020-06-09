@@ -400,6 +400,40 @@ local http = record
 end
 ```
 
+### Tagged records
+
+Teal supports a very simple form of subtyping for records: tagged records.
+You can specify a field of type number, string or boolean to act as a _tag_
+for a parent record type, and then define children record types that extend
+the parent record discriminating them based on the tag. This is how it
+works:
+
+```
+local Widget = record
+   tag widget_type: string
+
+   x: number
+   y: number
+end
+
+local Button = record is Widget with widget_type = "button"
+   text: string
+end
+
+local Field = record is Widget with widget_type = "field"
+   width: number
+   input: string
+end
+
+local function show_widget(w: Widget)
+   if w is Button then
+      draw_button(w.x, w.y, w.text)
+   elseif w is Field then
+      draw_field(w.x, w.y, w.width, w.input)
+   end
+end
+```
+
 ## Generics
 
 Teal supports a simple form of generics that is useful enough for dealing
