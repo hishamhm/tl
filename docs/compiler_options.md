@@ -21,17 +21,18 @@ return {
 
 ## List of compiler options
 
-| Command line option | Config key | Type | Relevant Commands | Description |
-| --- | --- | --- | --- | --- |
-| `-l --preload`  | `preload_modules` | `{string}` | `build` `check` `gen` `run` | Execute the equivalent of `require('modulename')` before executing the tl script(s). |
-| `-I --include-dir` |  `include_dir` | `{string}` | `build` `check` `gen` `run` | Prepend this directory to the module search path.
-| `--skip-compat53` | `skip_compat53` | `boolean` | `build` `gen` | Skip compat53 insertions.
-|| `include` | `{string}` | `build` | The set of files to compile/check. See below for details on patterns.
-|| `exclude` | `{string}` | `build` | The set of files to exclude. See below for details on patterns.
-| `-s --source-dir` | `source_dir` | `string` | `build` | Set the directory to be searched for files. `gen` will compile every .tl file in every subdirectory by default.
-| `-b --build-dir` | `build_dir` | `string` | `build` | Set the directory for generated files, mimicking the file structure of the source files.
-|| `files` | `{string}` | `build` | The names of files to be compiled. Does not accept patterns like `include`.
-| `-p --pretend --dry-run` ||| `build` `gen`  | Don't compile/write to any files, but type check and log what files would be written to.
+| Command line option      | Config key        | Type       | Relevant Commands           | Description                                                                                                     |
+| ---                      | ---               | ---        | ---                         | ---                                                                                                             |
+| `-l --preload`           | `preload_modules` | `{string}` | `build` `check` `gen` `run` | Execute the equivalent of `require('modulename')` before executing the tl script(s).                            |
+| `-I --include-dir`       | `include_dir`     | `{string}` | `build` `check` `gen` `run` | Prepend this directory to the module search path.                                                               |
+| `--skip-compat53`        | `skip_compat53`   | `boolean`  | `build` `gen`               | Skip compat53 insertions.                                                                                       |
+|                          | `include`         | `{string}` | `build`                     | The set of files to compile/check. See below for details on patterns.                                           |
+|                          | `exclude`         | `{string}` | `build`                     | The set of files to exclude. See below for details on patterns.                                                 |
+| `-s --source-dir`        | `source_dir`      | `string`   | `build`                     | Set the directory to be searched for files. `gen` will compile every .tl file in every subdirectory by default. |
+| `-b --build-dir`         | `build_dir`       | `string`   | `build`                     | Set the directory for generated files, mimicking the file structure of the source files.                        |
+|                          | `files`           | `{string}` | `build`                     | The names of files to be compiled. Does not accept patterns like `include`.                                     |
+| `-p --pretend --dry-run` |                   |            | `build` `gen`               | Don't compile/write to any files, but type check and log what files would be written to.                        |
+| `-q --quiet`             | `quiet`           | `boolean`  | `check`                     | Do not print information messages to stdout. Errors may still be printed to stderr.                             |
 
 ### Include/Exclude patterns
 

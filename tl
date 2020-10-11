@@ -12,8 +12,8 @@ local function script_path()
    return str:match("(.*[/\\])") or "."
 end
 
-local function printerr(s)
-   io.stderr:write(s .. "\n")
+local function printerr(s, out)
+   out:write(s .. "\n")
 end
 
 local function trim(str)
@@ -21,7 +21,7 @@ local function trim(str)
 end
 
 local function die(msg)
-   printerr(msg)
+   printerr(msg, io.stderr)
    os.exit(1)
 end
 
@@ -54,7 +54,7 @@ local function validate_config(config)
    }
 
    for k, _ in pairs(config) do
-      if not valid_keys[k] then
+      if valid_keys[k] == nil then
          print(string.format("Warning: unknown key '%s' in tlconfig.lua", k))
       end
    end
@@ -142,6 +142,8 @@ local function get_args_parser()
    build_command:option("-s --source-dir", "Compile all *.tl files in <directory> (and all subdirectories).")
                 :argname("<directory>")
 
+   local repl_command = parser:command("repl", "Runs the Teal REPL.")
+
    return parser
 end
 
@@ -193,16 +195,17 @@ if cmd == "gen" and args["output"] and #args["script"] ~= 1 then
    os.exit(1)
 end
 
-local function report_errors(category, errors)
+local function report_errors(category, errors, out)
    if not errors then
       return false
    end
+   out = out or io.stderr
    if #errors > 0 then
       local n = #errors
-      printerr("========================================")
-      printerr(n .. " " .. category .. (n ~= 1 and "s" or "") .. ":")
+      printerr("========================================", out)
+      printerr(n .. " " .. category .. (n ~= 1 and "s" or "") .. ":", out)
       for _, err in ipairs(errors) do
-         printerr(err.filename .. ":" .. err.y .. ":" .. err.x .. ": " .. (err.msg or ""))
+         printerr(err.filename .. ":" .. err.y .. ":" .. err.x .. ": " .. (err.msg or ""), out)
       end
       return true
    end
@@ -215,9 +218,9 @@ local exit = 0
 --                        ENVIRONMENT                             --
 --------------------------------------------------------------------
 
-local function report_type_errors(result)
-   local has_type_errors = report_errors("error", result.type_errors)
-   report_errors("unknown variable", result.unknowns)
+local function report_type_errors(result, out)
+   local has_type_errors = report_errors("error", result.type_errors, out)
+   report_errors("unknown variable", result.unknowns, out)
 
    return not has_type_errors
 end
@@ -472,6 +475,183 @@ end
 
 
 --------------------------------------------------------------------
+--                            REPL                                --
+--------------------------------------------------------------------
+
+-- Compatibility for Lua 5.2 and higher
+-- by Sergey Rozhenko
+-- http://lua-users.org/lists/lua-l/2010-06/msg00313.html
+if setfenv == nil then
+   setfenv = function(f, t)
+      f = (type(f) == 'function' and f or debug.getinfo(f + 1, 'f').func)
+      local name
+      local up = 0
+      repeat
+         up = up + 1
+         name = debug.getupvalue(f, up)
+      until name == '_ENV' or name == nil
+      if name then
+         debug.upvaluejoin(f, up, function() return name end, 1) -- use unique upvalue
+         debug.setupvalue(f, up, t)
+      end
+      if f ~= 0 then return f end
+   end
+end
+
+if unpack == nil then
+   unpack = table.unpack
+end
+
+if cmd == "repl" then
+   local repl = {
+      finished = false,
+      continuation = false,
+      env = {},
+      tl_env = tl.init_env(false),
+      io_in = io.stdin,
+      io_out = io.stdout
+   }
+
+   -- TODO expose tl's base types so we can write a type signature for a "quit"
+   -- function in plain Lua to put in the REPL's environment.
+
+   function repl:print_prompt()
+      local prompt = "> "
+      if self.continuation then
+         prompt = ">> "
+      end
+      self.io_out:write(prompt)
+   end
+
+   function repl:compile_chunk(source)
+      local result, err = tl.process_string(source, false, self.tl_env, nil, modules)
+      -- print(require"inspect"(result), err)
+      if err then
+         return nil, err
+      end
+
+      if #(result.syntax_errors or {}) > 0 then
+         return nil, "syntax error", result.syntax_errors
+      end
+
+      if #(result.type_errors or {}) > 0 then
+         return nil, "type error", result.type_errors
+      end
+
+      if #(result.unknowns or {}) > 0 then
+         return nil, "unknown variable", result.unknowns
+      end
+
+      for name, var in pairs(result.env.globals) do
+         self.tl_env.globals[name] = var
+      end
+      for name, mod in pairs(result.env.modules) do
+         self.tl_env.modules[name] = mod
+      end
+
+      local filename = "@string[\"" .. source:sub(1, 10) .. "\"]"
+      local chunk, err = (loadstring or load)(tl.pretty_print_ast(result.ast), filename)
+      if err then
+         return nil, "compile error", {{msg = err, x = 0, y = 0, filename = filename}}
+      end
+      return chunk, nil
+   end
+
+   function repl:compile(source)
+      local chunk, err_kind, errors = self:compile_chunk("return " .. source)
+
+      if err_kind == "syntax error" then
+         chunk, err_kind, errors = self:compile_chunk("global " .. source)
+
+         if err_kind == "syntax error" then
+            chunk, err_kind, errors = self:compile_chunk(source)
+         end
+      end
+
+      return chunk, err_kind, errors
+   end
+
+   function repl:read_input()
+      return self.io_in:read("*l")
+   end
+
+   local function value_to_string(val)
+      if type(val) == "string" then
+         return ("\"%s\""):format(val)
+      end
+      return tostring(val)
+   end
+
+   function repl:print_line(str)
+      self.io_out:write((str or "") .. "\n")
+   end
+
+   function repl:print_error(err)
+      self:print_line(err)
+   end
+
+   function repl:print_results(results)
+      if results.n == 0 then
+         return
+      end
+
+      for i, val in ipairs(results) do
+         self.io_out:write(value_to_string(val))
+         if i < results.n then
+            self.io_out:write("\t")
+         end
+      end
+      self.io_out:write("\n")
+   end
+
+   local function gather_results(success, ...)
+      local n = select('#', ...)
+      return success, { n = n, ... }
+   end
+
+   function repl:step()
+      repl:print_prompt()
+      local tl_source = repl:read_input()
+
+      if tl_source == nil then
+         -- User pressed Ctrl-D or similar.
+         self.finished = true
+         return
+      end
+
+      local chunk, err_kind, errors = self:compile(tl_source)
+      if chunk then
+         setfenv(chunk, self.env)
+
+         local success, results = gather_results(xpcall(chunk, debug.traceback))
+         if success then
+            self:print_results(results)
+         else
+            self:print_error(results[1])
+         end
+      else
+         -- TODO Detect when we can continue on multiple lines. Lua's compiler
+         -- consistently prints out '<eof>' at the end of an error message if it
+         -- expects more input, but the error output from the Teal compiler can
+         -- vary in that case.
+         report_errors(err_kind, errors, self.io_out)
+      end
+   end
+
+   function repl:run()
+      self:print_line(("Teal REPL (%s)"):format(version_string))
+      repeat
+         self:step()
+      until self.finished
+   end
+
+   repl:run()
+
+   os.exit(0)
+end
+
+
+--------------------------------------------------------------------
 --                      PATTERN MATCHING                          --
 --------------------------------------------------------------------
 
@@ -705,13 +885,13 @@ if cmd == "build" then
 
    if tlconfig["files"] then
       -- TODO: check if files are not relative
-      for i, fname in ipairs(tlconfig["files"]) do
+      for _, fname in ipairs(tlconfig["files"]) do
          if not project:find(fname) then
             die("Build error: file \"" .. fname .. "\" not found")
          end
          project.source_file_map[fname] = fname:gsub("%.tl$", ".lua")
          if tlconfig["build_dir"] then
-            project.source_file_map[path] = path_concat(tlconfig["build_dir"], project.source_file_map[path])
+            project.source_file_map[fname] = path_concat(tlconfig["build_dir"], project.source_file_map[fname])
          end
          check_parent_dirs(project.source_file_map[fname])
       end

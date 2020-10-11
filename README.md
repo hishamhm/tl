@@ -37,6 +37,10 @@ Once `tl` is in your path, there are a few subcommands:
 * `tl gen module.tl` will check for syntax errors and
   generate a `module.lua` file in plain Lua with all type annotations
   stripped.
+* `tl repl` lets you try out Teal on the command-line through an interactive
+  REPL.
+* `tl build` will compile all Teal files in the current or specified directory,
+  according to the options in a `tlconfig.lua` file. See the documentation for more details.
 
 ## Documentation
 
@@ -47,6 +51,12 @@ You can learn more about programming with Teal in the [tutorial](docs/tutorial.m
 We have a collaborative repository for type definitions of Lua libraries
 at https://github.com/teal-language/teal-types — check it out and make your
 contribution!
+
+To use the definitions, simply place them on your module search path or use `tl
+-I path/to/types/` and call `require("module")` in your code as usual. When run
+from Teal, this will automatically search for and load the corresponding `.d.tl`
+file containing the type definitions into the compiler during the type checking
+phase.
 
 ## Text editor support
 
