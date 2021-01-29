@@ -10,7 +10,8 @@ describe("binary metamethod __add", function()
 
       local rec_mt: metatable<Rec>
       rec_mt = {
-         __call = function(self: Rec, s: string, n: number): string
+         -- FIXME ARITY the callback for __call is declared as vararg, so the string arguments need to be optional...
+         __call = function(self: Rec, s?: string, n?: number): string
             return tostring(self.x + n) .. s
          end,
          __add = function(a: Rec, b: Rec): Rec
@@ -30,12 +31,13 @@ describe("binary metamethod __add", function()
    it("can be used on a record prototype", util.check [[
       local record A
          value: number
-         metamethod __call: function(A, number): A
+         metamethod __call: function(A, ? number): A
          metamethod __add: function(A, A): A
       end
       local A_mt: metatable<A>
       A_mt = {
-         __call = function(a: A, v: number): A
+         -- FIXME ARITY the callback for __call is declared as vararg, so the string arguments need to be optional...
+         __call = function(a: A, v?: number): A
             return setmetatable({value = v} as A, A_mt)
          end,
          __add = function(a: A, b: A): A

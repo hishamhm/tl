@@ -36,7 +36,7 @@ describe("subtyping of nil:", function()
    ]])
 
    it("nil <: thread", util.check [[
-      local c = coroutine.create()
+      local c = coroutine.create(function() end)
       c = nil
    ]])
 

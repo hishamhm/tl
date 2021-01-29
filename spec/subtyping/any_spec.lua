@@ -39,7 +39,7 @@ describe("subtyping of any:", function()
 
    it("thread <: any", util.check [[
       local a: any
-      a = coroutine.create()
+      a = coroutine.create(function() end)
    ]])
 
    it("poly <: any", util.check [[

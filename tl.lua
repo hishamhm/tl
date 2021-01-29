@@ -189,7 +189,7 @@ do
    end
 
    local lex_char_symbols = {}
-   for _, c in ipairs({ "[", "]", "(", ")", "{", "}", ",", "#", "`", ";" }) do
+   for _, c in ipairs({ "[", "]", "(", ")", "{", "}", ",", "#", "`", ";", "?" }) do
       lex_char_symbols[c] = true
    end
 
@@ -936,6 +936,10 @@ local Type = {}
 
 
 
+
+
+
+
 local Operator = {}
 
 
@@ -1087,6 +1091,7 @@ local Node = {}
 
 
 
+
 local function is_array_type(t)
    return t.typename == "array" or t.typename == "arrayrecord"
 end
@@ -1147,7 +1152,7 @@ end
 
 local function new_node(tokens, i, kind)
    local t = tokens[i]
-   return { y = t.y, x = t.x, tk = t.tk, kind = kind or t.kind }
+   return { y = t.y, x = t.x, tk = t.tk, kind = kind }
 end
 
 local function a_type(t)
@@ -1168,7 +1173,7 @@ end
 
 local function verify_kind(ps, i, kind, node_kind)
    if ps.tokens[i].kind == kind then
-      return i + 1, new_node(ps.tokens, i, node_kind)
+      return i + 1, new_node(ps.tokens, i, node_kind or kind)
    end
    return fail(ps, i, "syntax error, expected " .. kind)
 end
@@ -1206,6 +1211,8 @@ local function parse_table_value(ps, i)
 end
 
 local function parse_table_item(ps, i, n)
+   n = n or 1
+
    local node = new_node(ps.tokens, i, "table_item")
    if ps.tokens[i].kind == "$EOF$" then
       return fail(ps, i, "unexpected eof")
@@ -1274,7 +1281,7 @@ local SeparatorMode = {}
 
 
 local function parse_list(ps, i, list, close, sep, parse_item)
-   local n = 1
+   local n
    while ps.tokens[i].kind ~= "$EOF$" do
       if close[ps.tokens[i].tk] then
          (list).yend = ps.tokens[i].y
@@ -1333,7 +1340,7 @@ local function parse_trying_list(ps, i, list, parse_item)
       tokens = ps.tokens,
       errs = {},
    }
-   local tryi, item = parse_item(try_ps, i)
+   local tryi, item, n = parse_item(try_ps, i)
    if not item then
       return i, list
    end
@@ -1345,7 +1352,9 @@ local function parse_trying_list(ps, i, list, parse_item)
    if ps.tokens[i].tk == "," then
       while ps.tokens[i].tk == "," do
          i = i + 1
-         i, item = parse_item(ps, i)
+         local oldn = n
+         i, item = parse_item(ps, i, n)
+         n = n or oldn
          table.insert(list, item)
       end
    end
@@ -1722,7 +1731,7 @@ do
             local args = new_node(ps.tokens, i, "expression_list")
             local argument
             if ps.tokens[i].kind == "string" then
-               argument = new_node(ps.tokens, i)
+               argument = new_node(ps.tokens, i, "string")
                argument.conststr = unquote(ps.tokens[i].tk)
                i = i + 1
             else
@@ -1881,6 +1890,10 @@ local function parse_argument(ps, i)
    else
       i, node = verify_kind(ps, i, "identifier", "argument")
    end
+   if ps.tokens[i].tk == "?" then
+      i = i + 1
+      node.opt = true
+   end
    if ps.tokens[i].tk == ":" then
       i = i + 1
       local decltype
@@ -1897,9 +1910,15 @@ end
 parse_argument_list = function(ps, i)
    local node = new_node(ps.tokens, i, "argument_list")
    i, node = parse_bracket_list(ps, i, node, "(", ")", "sep", parse_argument)
+   local opts = false
    for a, arg in ipairs(node) do
       if arg.tk == "..." and a ~= #node then
          return fail(ps, i, "'...' can only be last argument")
+      end
+      if arg.opt then
+         opts = true
+      elseif opts then
+         return fail(ps, i, "non-optional arguments cannot follow optional arguments")
       end
    end
    return i, node
@@ -1907,8 +1926,19 @@ end
 
 local function parse_argument_type(ps, i)
    local is_va = false
-   if ps.tokens[i].kind == "identifier" and ps.tokens[i + 1].tk == ":" then
-      i = i + 2
+   local opt = false
+   if ps.tokens[i].kind == "identifier" then
+      if ps.tokens[i + 1].tk == "?" then
+         opt = true
+         if ps.tokens[i + 2].tk == ":" then
+            i = i + 3
+         end
+      elseif ps.tokens[i + 1].tk == ":" then
+         i = i + 2
+      end
+   elseif ps.tokens[i].kind == "?" then
+      opt = true
+      i = i + 1
    elseif ps.tokens[i].tk == "..." then
       if ps.tokens[i + 1].tk == ":" then
          i = i + 2
@@ -1920,11 +1950,12 @@ local function parse_argument_type(ps, i)
 
    local typ; i, typ = parse_type(ps, i)
    if typ then
+      typ.opt = opt
 
       typ.is_va = is_va
    end
 
-   return i, typ, 0
+   return i, typ
 end
 
 parse_argument_type_list = function(ps, i)
@@ -2633,15 +2664,12 @@ local function visit_before(ast, kind, visit)
 end
 
 local function visit_after(ast, kind, visit, xs)
-   if visit.after and visit.after.before then
-      visit.after.before(ast, xs)
-   end
    local ret
    if visit.cbs[kind].after then
       ret = visit.cbs[kind].after(ast, xs)
    end
-   if visit.after and visit.after.after then
-      ret = visit.after.after(ast, xs, ret)
+   if visit.after_each then
+      ret = visit.after_each(ast, xs, ret)
    end
    return ret
 end
@@ -2792,7 +2820,7 @@ local function recurse_node(ast,
       xs[1] = recurse_node(ast.vars, visit_node, visit_type)
       xs[2] = recurse_node(ast.exps, visit_node, visit_type)
       if cbs.before_statements then
-         cbs.before_statements(ast)
+         cbs.before_statements(ast, xs)
       end
       xs[3] = recurse_node(ast.body, visit_node, visit_type)
    elseif ast.kind == "fornum" then
@@ -3624,19 +3652,18 @@ local DEBUG_HOOK_FUNCTION = a_type({
    rets = {},
 })
 
-local TABLE_SORT_FUNCTION = a_type({ typename = "function", args = { ALPHA, ALPHA }, rets = { BOOLEAN } })
-
-
-local OPT_NUMBER = NUMBER
-local OPT_STRING = STRING
-local OPT_THREAD = THREAD
-local OPT_ALPHA = ALPHA
-local OPT_BETA = BETA
-local OPT_TABLE = TABLE
-local OPT_UNION = UNION
-local OPT_BOOLEAN = BOOLEAN
-local OPT_NOMINAL_FILE = NOMINAL_FILE
-local OPT_TABLE_SORT_FUNCTION = TABLE_SORT_FUNCTION
+local OPT_NUMBER = a_type({ opt = true, typename = "number" })
+local OPT_STRING = a_type({ opt = true, typename = "string" })
+local OPT_THREAD = a_type({ opt = true, typename = "thread" })
+local OPT_ALPHA = a_type({ opt = true, typename = "typevar", typevar = "@a" })
+local OPT_BETA = a_type({ opt = true, typename = "typevar", typevar = "@b" })
+local OPT_TABLE = a_type({ opt = true, typename = "map", keys = ANY, values = ANY })
+local OPT_BOOLEAN = a_type({ opt = true, typename = "boolean" })
+local OPT_NOMINAL_FILE = a_type({ opt = true, typename = "nominal", names = { "FILE" } })
+local OPT_TABLE_SORT_FUNCTION = a_type({ opt = true, typename = "function", args = { ALPHA, ALPHA }, rets = { BOOLEAN } })
+local function OPT_UNION(t)
+   return a_type({ opt = true, typename = "union", types = t })
+end
 
 local numeric_binop = {
    ["number"] = {
@@ -3832,137 +3859,139 @@ local function is_unknown(t)
    t.typename == "unknown_emptytable_value"
 end
 
-local show_type
-
-local function show_type_base(t, seen)
-
-   if seen[t] then
-      return seen[t]
-   end
-   seen[t] = "..."
-
-   local function show(t)
-      return show_type(t, seen)
-   end
-
-   if t.typename == "nominal" then
-      if t.typevals then
-         local out = { table.concat(t.names, "."), "<" }
-         local vals = {}
-         for _, v in ipairs(t.typevals) do
-            table.insert(vals, show(v))
-         end
-         table.insert(out, table.concat(vals, ", "))
-         table.insert(out, ">")
-         return table.concat(out)
-      else
-         return table.concat(t.names, ".")
-      end
-   elseif t.typename == "tuple" then
-      local out = {}
-      for _, v in ipairs(t) do
-         table.insert(out, show(v))
-      end
-      return "(" .. table.concat(out, ", ") .. ")"
-   elseif t.typename == "tupletable" then
-      local out = {}
-      for _, v in ipairs(t.types) do
-         table.insert(out, show(v))
-      end
-      return "{" .. table.concat(out, ", ") .. "}"
-   elseif t.typename == "poly" then
-      local out = {}
-      for _, v in ipairs(t.types) do
-         table.insert(out, show(v))
-      end
-      return table.concat(out, " and ")
-   elseif t.typename == "union" then
-      local out = {}
-      for _, v in ipairs(t.types) do
-         table.insert(out, show(v))
-      end
-      return table.concat(out, " | ")
-   elseif t.typename == "emptytable" then
-      return "{}"
-   elseif t.typename == "map" then
-      return "{" .. show(t.keys) .. " : " .. show(t.values) .. "}"
-   elseif t.typename == "array" then
-      return "{" .. show(t.elements) .. "}"
-   elseif t.typename == "enum" then
-      return t.names and table.concat(t.names, ".") or "enum"
-   elseif is_record_type(t) then
-      local out = {}
-      if t.elements then
-         table.insert(out, "{" .. show(t.elements) .. "}")
-      end
-      for _, k in ipairs(t.field_order) do
-         local v = t.fields[k]
-         table.insert(out, k .. ": " .. show(v))
-      end
-      return "record (" .. table.concat(out, "; ") .. ")"
-   elseif t.typename == "function" then
-      local out = {}
-      table.insert(out, "function(")
-      local args = {}
-      if t.is_method then
-         table.insert(args, "self")
-      end
-      for i, v in ipairs(t.args) do
-         if not t.is_method or i > 1 then
-            table.insert(args, show(v))
-         end
-      end
-      table.insert(out, table.concat(args, ","))
-      table.insert(out, ")")
-      if #t.rets > 0 then
-         table.insert(out, ":")
-         local rets = {}
-         for _, v in ipairs(t.rets) do
-            table.insert(rets, show(v))
-         end
-         table.insert(out, table.concat(rets, ","))
-      end
-      return table.concat(out)
-   elseif t.typename == "number" or
-      t.typename == "boolean" or
-      t.typename == "thread" then
-      return t.typename
-   elseif t.typename == "string" then
-      return t.typename ..
-      (t.tk and " " .. t.tk or "")
-   elseif t.typename == "typevar" then
-      return t.typevar
-   elseif t.typename == "typearg" then
-      return t.typearg
-   elseif is_unknown(t) then
-      return "<unknown type>"
-   elseif t.typename == "invalid" then
-      return "<invalid type>"
-   elseif t.typename == "any" then
-      return "<any type>"
-   elseif t.typename == "nil" then
-      return "nil"
-   elseif is_typetype(t) then
-      return "type " .. show(t.def)
-   elseif t.typename == "bad_nominal" then
-      return table.concat(t.names, ".") .. " (an unknown type)"
-   else
-      return tostring(t)
-   end
-end
-
 local function inferred_msg(t)
    return " (inferred at " .. t.inferred_at_file .. ":" .. t.inferred_at.y .. ":" .. t.inferred_at.x .. ")"
 end
 
-show_type = function(t, seen)
-   seen = seen or {}
-   local ret = show_type_base(t, seen)
-   if t.inferred_at then
-      ret = ret .. inferred_msg(t)
+local show_type
+do
+   local show
+
+   local function show_base(t, seen)
+
+      if seen[t] then
+         return seen[t]
+      end
+      seen[t] = "..."
+
+      if t.typename == "nominal" then
+         if t.typevals then
+            local out = { table.concat(t.names, "."), "<" }
+            local vals = {}
+            for _, v in ipairs(t.typevals) do
+               table.insert(vals, show(v, seen))
+            end
+            table.insert(out, table.concat(vals, ", "))
+            table.insert(out, ">")
+            return table.concat(out)
+         else
+            return table.concat(t.names, ".")
+         end
+      elseif t.typename == "tuple" then
+         local out = {}
+         for _, v in ipairs(t) do
+            table.insert(out, show(v, seen))
+         end
+         return "(" .. table.concat(out, ", ") .. ")"
+      elseif t.typename == "tupletable" then
+         local out = {}
+         for _, v in ipairs(t.types) do
+            table.insert(out, show(v, seen))
+         end
+         return "{" .. table.concat(out, ", ") .. "}"
+      elseif t.typename == "poly" then
+         local out = {}
+         for _, v in ipairs(t.types) do
+            table.insert(out, show(v, seen))
+         end
+         return table.concat(out, " and ")
+      elseif t.typename == "union" then
+         local out = {}
+         for _, v in ipairs(t.types) do
+            table.insert(out, show(v, seen))
+         end
+         return table.concat(out, " | ")
+      elseif t.typename == "emptytable" then
+         return "{}"
+      elseif t.typename == "map" then
+         return "{" .. show(t.keys, seen) .. " : " .. show(t.values, seen) .. "}"
+      elseif t.typename == "array" then
+         return "{" .. show(t.elements, seen) .. "}"
+      elseif t.typename == "enum" then
+         return t.names and table.concat(t.names, ".") or "enum"
+      elseif is_record_type(t) then
+         local out = {}
+         if t.elements then
+            table.insert(out, "{" .. show(t.elements, seen) .. "}")
+         end
+         for _, k in ipairs(t.field_order) do
+            local v = t.fields[k]
+            table.insert(out, k .. ": " .. show(v, seen))
+         end
+         return "record (" .. table.concat(out, "; ") .. ")"
+      elseif t.typename == "function" then
+         local out = {}
+         table.insert(out, "function(")
+         local args = {}
+         if t.is_method then
+            table.insert(args, "self")
+         end
+         for i, v in ipairs(t.args) do
+            if not t.is_method or i > 1 then
+               table.insert(args, (v.opt and "? " or "") .. show(v, seen))
+            end
+         end
+         table.insert(out, table.concat(args, ","))
+         table.insert(out, ")")
+         if #t.rets > 0 then
+            table.insert(out, ":")
+            local rets = {}
+            for _, v in ipairs(t.rets) do
+               table.insert(rets, show(v, seen))
+            end
+            table.insert(out, table.concat(rets, ","))
+         end
+         return table.concat(out)
+      elseif t.typename == "number" or
+         t.typename == "boolean" or
+         t.typename == "thread" then
+         return t.typename
+      elseif t.typename == "string" then
+         return t.typename ..
+         (t.tk and " " .. t.tk or "")
+      elseif t.typename == "typevar" then
+         return t.typevar
+      elseif t.typename == "typearg" then
+         return t.typearg
+      elseif is_unknown(t) then
+         return "<unknown type>"
+      elseif t.typename == "invalid" then
+         return "<invalid type>"
+      elseif t.typename == "any" then
+         return "<any type>"
+      elseif t.typename == "nil" then
+         return "nil"
+      elseif is_typetype(t) then
+         return "type " .. show(t.def, seen)
+      elseif t.typename == "bad_nominal" then
+         return table.concat(t.names, ".") .. " (an unknown type)"
+      else
+         return tostring(t)
+      end
    end
-   seen[t] = ret
-   return ret
+
+   show = function(t, seen)
+      local ret = show_base(t, seen)
+      if t.inferred_at then
+         ret = ret .. inferred_msg(t)
+      end
+      seen[t] = ret
+      return ret
+   end
+
+   show_type = function(t)
+      return show(t, {})
+   end
 end
 
 local function search_for(module_name, suffix, path, tried)
@@ -4177,7 +4206,7 @@ local function init_globals(lax)
       ["assert"] = a_type({ typename = "function", typeargs = { ARG_ALPHA, ARG_BETA }, args = { ALPHA, OPT_BETA }, rets = { ALPHA } }),
       ["collectgarbage"] = a_type({ typename = "function", args = { STRING }, rets = { a_type({ typename = "union", types = { BOOLEAN, NUMBER } }), NUMBER, NUMBER } }),
       ["dofile"] = a_type({ typename = "function", args = { OPT_STRING }, rets = VARARG({ ANY }) }),
-      ["error"] = a_type({ typename = "function", args = { STRING, NUMBER }, rets = {} }),
+      ["error"] = a_type({ typename = "function", args = { STRING, OPT_NUMBER }, rets = {} }),
       ["getmetatable"] = a_type({ typename = "function", typeargs = { ARG_ALPHA }, args = { ALPHA }, rets = { NOMINAL_METATABLE_OF_ALPHA } }),
       ["ipairs"] = a_type({ typename = "function", typeargs = { ARG_ALPHA }, args = { ARRAY_OF_ALPHA }, rets = {
          a_type({ typename = "function", args = {}, rets = { NUMBER, ALPHA } }),
@@ -4218,7 +4247,7 @@ local function init_globals(lax)
          },
       }),
       ["setmetatable"] = a_type({ typeargs = { ARG_ALPHA }, typename = "function", args = { ALPHA, NOMINAL_METATABLE_OF_ALPHA }, rets = { ALPHA } }),
-      ["tonumber"] = a_type({ typename = "function", args = { ANY, NUMBER }, rets = { NUMBER } }),
+      ["tonumber"] = a_type({ typename = "function", args = { ANY, OPT_NUMBER }, rets = { NUMBER } }),
       ["tostring"] = a_type({ typename = "function", args = { ANY }, rets = { STRING } }),
       ["type"] = a_type({ typename = "function", args = { ANY }, rets = { STRING } }),
       ["FILE"] = a_type({
@@ -4229,10 +4258,10 @@ local function init_globals(lax)
             fields = {
                ["close"] = a_type({ typename = "function", args = { NOMINAL_FILE }, rets = { BOOLEAN, STRING } }),
                ["flush"] = a_type({ typename = "function", args = { NOMINAL_FILE }, rets = {} }),
-               ["lines"] = a_type({ typename = "function", args = VARARG({ NOMINAL_FILE, a_type({ typename = "union", types = { STRING, NUMBER } }) }), rets = {
+               ["lines"] = a_type({ typename = "function", args = VARARG({ NOMINAL_FILE, a_type({ opt = true, typename = "union", types = { STRING, NUMBER } }) }), rets = {
                   a_type({ typename = "function", args = {}, rets = VARARG({ STRING }) }),
                }, }),
-               ["read"] = a_type({ typename = "function", args = { NOMINAL_FILE, UNION({ STRING, NUMBER }) }, rets = { STRING, STRING } }),
+               ["read"] = a_type({ typename = "function", args = { NOMINAL_FILE, OPT_UNION({ STRING, NUMBER }) }, rets = { STRING, STRING } }),
                ["seek"] = a_type({ typename = "function", args = { NOMINAL_FILE, OPT_STRING, OPT_NUMBER }, rets = { NUMBER, STRING } }),
                ["setvbuf"] = a_type({ typename = "function", args = { NOMINAL_FILE, STRING, OPT_NUMBER }, rets = {} }),
                ["write"] = a_type({ typename = "function", args = VARARG({ NOMINAL_FILE, STRING }), rets = { NOMINAL_FILE, STRING } }),
@@ -4362,13 +4391,13 @@ local function init_globals(lax)
             ["close"] = a_type({ typename = "function", args = { OPT_NOMINAL_FILE }, rets = { BOOLEAN, STRING } }),
             ["flush"] = a_type({ typename = "function", args = {}, rets = {} }),
             ["input"] = a_type({ typename = "function", args = { OPT_UNION({ STRING, NOMINAL_FILE }) }, rets = { NOMINAL_FILE } }),
-            ["lines"] = a_type({ typename = "function", args = VARARG({ OPT_STRING, a_type({ typename = "union", types = { STRING, NUMBER } }) }), rets = {
+            ["lines"] = a_type({ typename = "function", args = VARARG({ OPT_STRING, a_type({ opt = true, typename = "union", types = { STRING, NUMBER } }) }), rets = {
                a_type({ typename = "function", args = {}, rets = VARARG({ STRING }) }),
             }, }),
-            ["open"] = a_type({ typename = "function", args = { STRING, STRING }, rets = { NOMINAL_FILE, STRING } }),
+            ["open"] = a_type({ typename = "function", args = { STRING, OPT_STRING }, rets = { NOMINAL_FILE, STRING } }),
             ["output"] = a_type({ typename = "function", args = { OPT_UNION({ STRING, NOMINAL_FILE }) }, rets = { NOMINAL_FILE } }),
-            ["popen"] = a_type({ typename = "function", args = { STRING, STRING }, rets = { NOMINAL_FILE, STRING } }),
-            ["read"] = a_type({ typename = "function", args = { UNION({ STRING, NUMBER }) }, rets = { STRING, STRING } }),
+            ["popen"] = a_type({ typename = "function", args = { STRING, OPT_STRING }, rets = { NOMINAL_FILE, STRING } }),
+            ["read"] = a_type({ typename = "function", args = { OPT_UNION({ STRING, NUMBER }) }, rets = { STRING, STRING } }),
             ["stderr"] = NOMINAL_FILE,
             ["stdin"] = NOMINAL_FILE,
             ["stdout"] = NOMINAL_FILE,
@@ -4395,7 +4424,7 @@ local function init_globals(lax)
             ["frexp"] = a_type({ typename = "function", args = { NUMBER }, rets = { NUMBER, NUMBER } }),
             ["huge"] = NUMBER,
             ["ldexp"] = a_type({ typename = "function", args = { NUMBER, NUMBER }, rets = { NUMBER } }),
-            ["log"] = a_type({ typename = "function", args = { NUMBER, NUMBER }, rets = { NUMBER } }),
+            ["log"] = a_type({ typename = "function", args = { NUMBER, OPT_NUMBER }, rets = { NUMBER } }),
             ["log10"] = a_type({ typename = "function", args = { NUMBER }, rets = { NUMBER } }),
             ["max"] = a_type({ typename = "function", args = VARARG({ NUMBER }), rets = { NUMBER } }),
             ["maxinteger"] = NUMBER,
@@ -4405,7 +4434,7 @@ local function init_globals(lax)
             ["pi"] = NUMBER,
             ["pow"] = a_type({ typename = "function", args = { NUMBER, NUMBER }, rets = { NUMBER } }),
             ["rad"] = a_type({ typename = "function", args = { NUMBER }, rets = { NUMBER } }),
-            ["random"] = a_type({ typename = "function", args = { NUMBER, NUMBER }, rets = { NUMBER } }),
+            ["random"] = a_type({ typename = "function", args = { OPT_NUMBER, OPT_NUMBER }, rets = { NUMBER } }),
             ["randomseed"] = a_type({ typename = "function", args = { NUMBER }, rets = {} }),
             ["sin"] = a_type({ typename = "function", args = { NUMBER }, rets = { NUMBER } }),
             ["sinh"] = a_type({ typename = "function", args = { NUMBER }, rets = { NUMBER } }),
@@ -4425,13 +4454,13 @@ local function init_globals(lax)
                typename = "poly",
                types = {
                   a_type({ typename = "function", args = {}, rets = { STRING } }),
-                  a_type({ typename = "function", args = { OS_DATE_TABLE_FORMAT, NUMBER }, rets = { OS_DATE_TABLE } }),
+                  a_type({ typename = "function", args = { OS_DATE_TABLE_FORMAT, OPT_NUMBER }, rets = { OS_DATE_TABLE } }),
                   a_type({ typename = "function", args = { OPT_STRING, OPT_NUMBER }, rets = { STRING } }),
                },
             }),
             ["difftime"] = a_type({ typename = "function", args = { NUMBER, NUMBER }, rets = { NUMBER } }),
             ["execute"] = a_type({ typename = "function", args = { STRING }, rets = { BOOLEAN, STRING, NUMBER } }),
-            ["exit"] = a_type({ typename = "function", args = { UNION({ NUMBER, BOOLEAN }), BOOLEAN }, rets = {} }),
+            ["exit"] = a_type({ typename = "function", args = { OPT_UNION({ NUMBER, BOOLEAN }), OPT_BOOLEAN }, rets = {} }),
             ["getenv"] = a_type({ typename = "function", args = { STRING }, rets = { STRING } }),
             ["remove"] = a_type({ typename = "function", args = { STRING }, rets = { BOOLEAN, STRING } }),
             ["rename"] = a_type({ typename = "function", args = { STRING, STRING }, rets = { BOOLEAN, STRING } }),
@@ -4484,7 +4513,7 @@ local function init_globals(lax)
             ["gsub"] = a_type({
                typename = "poly",
                types = {
-                  a_type({ typename = "function", args = { STRING, STRING, STRING, NUMBER }, rets = { STRING, NUMBER } }),
+                  a_type({ typename = "function", args = { STRING, STRING, OPT_STRING, OPT_NUMBER }, rets = { STRING, NUMBER } }),
                   a_type({ typename = "function", args = { STRING, STRING, a_type({ typename = "map", keys = STRING, values = STRING }), NUMBER }, rets = { STRING, NUMBER } }),
                   a_type({ typename = "function", args = { STRING, STRING, a_type({ typename = "function", args = VARARG({ STRING }), rets = { STRING } }) }, rets = { STRING, NUMBER } }),
                   a_type({ typename = "function", args = { STRING, STRING, a_type({ typename = "function", args = VARARG({ STRING }), rets = { NUMBER } }) }, rets = { STRING, NUMBER } }),
@@ -4495,12 +4524,12 @@ local function init_globals(lax)
             }),
             ["len"] = a_type({ typename = "function", args = { STRING }, rets = { NUMBER } }),
             ["lower"] = a_type({ typename = "function", args = { STRING }, rets = { STRING } }),
-            ["match"] = a_type({ typename = "function", args = { STRING, STRING, NUMBER }, rets = VARARG({ STRING }) }),
+            ["match"] = a_type({ typename = "function", args = { STRING, OPT_STRING, OPT_NUMBER }, rets = VARARG({ STRING }) }),
             ["pack"] = a_type({ typename = "function", args = VARARG({ STRING, ANY }), rets = { STRING } }),
             ["packsize"] = a_type({ typename = "function", args = { STRING }, rets = { NUMBER } }),
             ["rep"] = a_type({ typename = "function", args = { STRING, NUMBER }, rets = { STRING } }),
             ["reverse"] = a_type({ typename = "function", args = { STRING }, rets = { STRING } }),
-            ["sub"] = a_type({ typename = "function", args = { STRING, NUMBER, NUMBER }, rets = { STRING } }),
+            ["sub"] = a_type({ typename = "function", args = { STRING, NUMBER, OPT_NUMBER }, rets = { STRING } }),
             ["unpack"] = a_type({ typename = "function", args = { STRING, STRING, OPT_NUMBER }, rets = VARARG({ ANY }) }),
             ["upper"] = a_type({ typename = "function", args = { STRING }, rets = { STRING } }),
          },
@@ -4526,7 +4555,7 @@ local function init_globals(lax)
             ["pack"] = a_type({ typename = "function", args = VARARG({ ANY }), rets = { TABLE } }),
             ["remove"] = a_type({ typename = "function", typeargs = { ARG_ALPHA }, args = { ARRAY_OF_ALPHA, OPT_NUMBER }, rets = { ALPHA } }),
             ["sort"] = a_type({ typename = "function", typeargs = { ARG_ALPHA }, args = { ARRAY_OF_ALPHA, OPT_TABLE_SORT_FUNCTION }, rets = {} }),
-            ["unpack"] = a_type({ typename = "function", needs_compat = true, typeargs = { ARG_ALPHA }, args = { ARRAY_OF_ALPHA, NUMBER, NUMBER }, rets = VARARG({ ALPHA }) }),
+            ["unpack"] = a_type({ typename = "function", needs_compat = true, typeargs = { ARG_ALPHA }, args = { ARRAY_OF_ALPHA, OPT_NUMBER, OPT_NUMBER }, rets = VARARG({ ALPHA }) }),
          },
       }),
       ["utf8"] = a_type({
@@ -4791,6 +4820,14 @@ tl.type_check = function(ast, opts)
       end
    end
 
+   local function shallow_copy(t)
+      local copy = {}
+      for k, v in pairs(t) do
+         copy[k] = v
+      end
+      return copy
+   end
+
    local no_nested_types = {
       ["string"] = true,
       ["number"] = true,
@@ -4802,121 +4839,134 @@ tl.type_check = function(ast, opts)
       ["unknown"] = true,
    }
 
-   local function resolve_typevars(t, seen, where)
+   local resolve_typevars
+   do
+      local function resolve(t, seen, where)
 
-      if no_nested_types[t.typename] or (t.typename == "nominal" and not t.typevals) then
-         return t
-      end
-
-      seen = seen or {}
-      if seen[t] then
-         return seen[t]
-      end
-
-      local orig_t = t
-      if t.typename == "typevar" then
-         t = find_var_type(t.typevar)
-         local rt
-         if not t then
-            rt = UNKNOWN
-         elseif t.typename == "string" then
-
-            rt = STRING
-         elseif no_nested_types[t.typename] or
-            (t.typename == "nominal" and not t.typevals) then
-            rt = t
+         if no_nested_types[t.typename] or (t.typename == "nominal" and not t.typevals and not t.opt) then
+            return t
          end
-         if rt then
-            seen[orig_t] = rt
-            return rt
+
+         seen = seen or {}
+         if seen[t] then
+            return seen[t]
          end
-      end
 
-      local copy = {}
-      seen[orig_t] = copy
+         local orig_t = t
+         if t.typename == "typevar" then
+            t = find_var_type(t.typevar)
+            local rt
+            if not t then
+               rt = UNKNOWN
+            elseif t.typename == "string" then
 
-      copy.typename = t.typename
-      copy.filename = t.filename
-      copy.typeid = t.typeid
-      copy.x = t.x
-      copy.y = t.y
-      copy.yend = t.yend
-      copy.names = t.names
-
-      for i, tf in ipairs(t) do
-         copy[i] = resolve_typevars(tf, seen, where)
-      end
-
-      if t.typename == "array" then
-         copy.elements = resolve_typevars(t.elements, seen, where)
-
-      elseif t.typename == "typearg" then
-         copy.typearg = t.typearg
-      elseif t.typename == "typevar" then
-         copy.typevar = t.typevar
-      elseif is_typetype(t) then
-         copy.def = resolve_typevars(t.def, seen, where)
-      elseif t.typename == "nominal" then
-         copy.typevals = resolve_typevars(t.typevals, seen, where)
-      elseif t.typename == "function" then
-         if t.typeargs then
-            copy.typeargs = {}
-            for i, tf in ipairs(t.typeargs) do
-               copy.typeargs[i] = resolve_typevars(tf, seen, where)
+               rt = STRING
+            elseif (no_nested_types[t.typename] or
+               (t.typename == "nominal" and not t.typevals)) and
+               not orig_t.opt then
+               rt = t
+            end
+            if rt then
+               seen[orig_t] = rt
+               return rt
             end
          end
 
-         copy.is_method = t.is_method
-         copy.args = resolve_typevars(t.args, seen, where)
-         copy.rets = resolve_typevars(t.rets, seen, where)
-      elseif t.typename == "record" or t.typename == "arrayrecord" then
-         if t.typeargs then
-            copy.typeargs = {}
-            for i, tf in ipairs(t.typeargs) do
-               copy.typeargs[i] = resolve_typevars(tf, seen, where)
+         local copy = {}
+         seen[orig_t] = copy
+
+         copy.opt = orig_t.opt
+
+         copy.typename = t.typename
+         copy.filename = t.filename
+         copy.typeid = t.typeid
+         copy.x = t.x
+         copy.y = t.y
+         copy.yend = t.yend
+         copy.names = t.names
+
+         for i, tf in ipairs(t) do
+            copy[i] = resolve(tf, seen, where)
+         end
+
+         if t.typename == "array" then
+            copy.elements = resolve(t.elements, seen, where)
+
+         elseif t.typename == "typearg" then
+            copy.typearg = t.typearg
+         elseif t.typename == "typevar" then
+            copy.typevar = t.typevar
+         elseif is_typetype(t) then
+            copy.def = resolve(t.def, seen, where)
+         elseif t.typename == "nominal" then
+            if t.typevals then
+               copy.typevals = resolve(t.typevals, seen, where)
             end
-         end
-
-         if t.elements then
-            copy.elements = resolve_typevars(t.elements, seen, where)
-         end
-
-         copy.fields = {}
-         for _, k in ipairs(t.field_order) do
-            copy.fields[k] = resolve_typevars(t.fields[k], seen, where)
-         end
-         copy.field_order = t.field_order
-
-         if t.meta_fields then
-            copy.meta_fields = {}
-            for _, k in ipairs(t.meta_field_order) do
-               copy.meta_fields[k] = resolve_typevars(t.meta_fields[k], seen, where)
+         elseif t.typename == "function" then
+            if t.typeargs then
+               copy.typeargs = {}
+               for i, tf in ipairs(t.typeargs) do
+                  copy.typeargs[i] = resolve(tf, seen, where)
+               end
             end
-            copy.meta_field_order = t.meta_field_order
-         end
-      elseif t.typename == "map" then
-         copy.keys = resolve_typevars(t.keys, seen, where)
-         copy.values = resolve_typevars(t.values, seen, where)
-      elseif t.typename == "union" then
-         copy.types = {}
-         for i, tf in ipairs(t.types) do
-            copy.types[i] = resolve_typevars(tf, seen, where)
+
+            copy.is_method = t.is_method
+            copy.min_arity = t.min_arity
+            copy.args = resolve(t.args, seen, where)
+            copy.rets = resolve(t.rets, seen, where)
+         elseif t.typename == "record" or t.typename == "arrayrecord" then
+            if t.typeargs then
+               copy.typeargs = {}
+               for i, tf in ipairs(t.typeargs) do
+                  copy.typeargs[i] = resolve(tf, seen, where)
+               end
+            end
+
+            if t.elements then
+               copy.elements = resolve(t.elements, seen, where)
+            end
+
+            copy.fields = {}
+            for _, k in ipairs(t.field_order) do
+               copy.fields[k] = resolve(t.fields[k], seen, where)
+            end
+            copy.field_order = t.field_order
+
+            if t.meta_fields then
+               copy.meta_fields = {}
+               for _, k in ipairs(t.meta_field_order) do
+                  copy.meta_fields[k] = resolve(t.meta_fields[k], seen, where)
+               end
+               copy.meta_field_order = t.meta_field_order
+            end
+         elseif t.typename == "map" then
+            copy.keys = resolve(t.keys, seen, where)
+            copy.values = resolve(t.values, seen, where)
+         elseif t.typename == "union" then
+            copy.types = {}
+            for i, tf in ipairs(t.types) do
+               copy.types[i] = resolve(tf, seen, where)
+            end
+
+            local ok, err = is_valid_union(copy)
+            if not ok then
+               type_error(where or t, err, t)
+            end
+         elseif t.typename == "poly" or t.typename == "tupletable" then
+            copy.types = {}
+            for i, tf in ipairs(t.types) do
+               copy.types[i] = resolve(tf, seen, where)
+            end
+         elseif t.typename == "tuple" then
+            copy.is_va = t.is_va
          end
 
-         local ok, err = is_valid_union(copy)
-         if not ok then
-            type_error(where or t, err, t)
-         end
-      elseif t.typename == "poly" or t.typename == "tupletable" then
-         copy.types = {}
-         for i, tf in ipairs(t.types) do
-            copy.types[i] = resolve_typevars(tf, seen, where)
-         end
-      elseif t.typename == "tuple" then
-         copy.is_va = t.is_va
+         return copy
       end
 
-      return copy
+      resolve_typevars = function(t, where)
+         return resolve(t, {}, where or t)
+      end
    end
 
    local function infer_var(emptytable, t, node)
@@ -5274,6 +5324,13 @@ tl.type_check = function(ast, opts)
          local all_errs = {}
          for i = 1, #t1.args do
             arg_check(same_type, t1.args[i], t2.args[i], t1, i, all_errs)
+            local t1opt = not not t1.args[i].opt
+            local t2opt = not not t2.args[i].opt
+            if t1opt ~= t2opt then
+               return false, terr(t1, "argument " .. i .. ": got " ..
+               (t1opt and "optional" or "non-optional") .. ", expected " ..
+               (t2opt and "optional" or "non-optional"))
+            end
          end
          for i = 1, #t1.rets do
             local _, errs = same_type(t1.rets[i], t2.rets[i])
@@ -5395,6 +5452,36 @@ tl.type_check = function(ast, opts)
          end
       end
       return arr_type
+   end
+
+   local function set_min_arity(t)
+      local min_arity = 0
+      for i, arg in ipairs(t.args) do
+         if not arg.opt then
+            min_arity = i
+         end
+      end
+      if t.args.is_va then
+         min_arity = min_arity - 1
+      end
+      t.min_arity = min_arity
+      return min_arity
+   end
+
+   local function function_args_arity_message(f, given)
+      local arity = #f.args
+      local min_arity = f.min_arity or set_min_arity(f)
+      if f.is_va then
+         return "at least " .. min_arity
+      elseif min_arity < arity then
+         if given > arity then
+            return "at most " .. arity
+         else
+            return "from " .. min_arity .. " to " .. arity
+         end
+      else
+         return tostring(arity)
+      end
    end
 
 
@@ -5649,13 +5736,27 @@ tl.type_check = function(ast, opts)
          end
       elseif t1.typename == "function" and t2.typename == "function" then
          local all_errs = {}
-         if (not t2.args.is_va) and #t1.args > #t2.args then
+         local t1_min_arity = t1.min_arity or set_min_arity(t1)
+         local t2_min_arity = t1.min_arity or set_min_arity(t2)
+
+         if (not t2.args.is_va) and t1_min_arity > t2_min_arity then
             t1.args.typename = "tuple"
             t2.args.typename = "tuple"
-            table.insert(all_errs, error_in_type(t1, "incompatible number of arguments: got " .. #t1.args .. " %s, expected " .. #t2.args .. " %s", t1.args, t2.args))
+            local expected = function_args_arity_message(t2, #t1.args)
+            table.insert(all_errs, error_in_type(t1, "incompatible number of arguments: got " .. #t1.args .. " %s, expected " .. expected .. " %s", t1.args, t2.args))
          else
-            for i = (t1.is_method and 2 or 1), #t1.args do
-               arg_check(is_a, t1.args[i], t2.args[i] or ANY, nil, i, all_errs)
+            local t1nargs = #t1.args
+            local t2nargs = #t2.args
+            for i = (t1.is_method and 2 or 1), t1nargs do
+               local t1a = t1.args[i]
+               local t2a = t2.args[i] or (t2.args.is_va and t2.args[#t2.args])
+               local t1aopt = t1a and (t1a.opt or (t1.args.is_va and i >= t1nargs))
+               local t2aopt = t2a and (t2a.opt or (t2.args.is_va and i >= t2nargs))
+               if not t1aopt and t2aopt then
+                  table.insert(all_errs, error_in_type(t1, "argument " .. i .. " is non-optional, but is optional in expected type %s", t2))
+               else
+                  arg_check(is_a, t1a, t2a, nil, i, all_errs)
+               end
             end
          end
          local diff_by_va = #t2.rets - #t1.rets == 1 and t2.rets.is_va
@@ -5686,14 +5787,6 @@ tl.type_check = function(ast, opts)
       end
 
       return false, terr(t1, "got %s, expected %s", t1, t2)
-   end
-
-   local function shallow_copy(t)
-      local copy = {}
-      for k, v in pairs(t) do
-         copy[k] = v
-      end
-      return copy
    end
 
    local function assert_is_a(node, t1, t2, context, name)
@@ -5793,11 +5886,6 @@ tl.type_check = function(ast, opts)
             argdelta = 0
          end
 
-         if f.is_method and not is_method and not (args[1] and is_a(args[1], f.args[1])) then
-            table.insert(errs, { y = node.y, x = node.x, msg = "invoked method as a regular function: use ':' instead of '.'", filename = filename })
-            return nil, errs
-         end
-
          local va = f.args.is_va
          local nargs = va and
          math.max(#args, #f.args) or
@@ -5883,66 +5971,51 @@ tl.type_check = function(ast, opts)
          args = args or {}
          local poly = func.typename == "poly" and func or { types = { func } }
          local first_errs
-         local expects = {}
 
          local tried = {}
          for i, f in ipairs(poly.types) do
-            if not tried[i] then
-               if f.typename ~= "function" then
-                  if lax and is_unknown(f) then
-                     return UNKNOWN
-                  end
-                  return node_error(node, "not a function: %s", f)
+            if f.typename ~= "function" then
+               if lax and is_unknown(f) then
+                  return UNKNOWN
                end
-               table.insert(expects, tostring(#f.args or 0))
-               if #args == (#f.args or 0) or (f.args.is_va and #args > #f.args) then
-                  tried[i] = true
-                  local matched, errs = try_match_func_args(node, f, args, is_method, argdelta)
-                  if matched then
-                     return matched
-                  else
-                     revert_typeargs(f)
-                  end
-                  first_errs = first_errs or errs
-               end
+               return node_error(node, "not a function: %s", f)
+            elseif f.is_method and not is_method and not (args[1] and is_a(args[1], f.args[1])) then
+               return node_error(node, "invoked method as a regular function: use ':' instead of '.'")
             end
-         end
+            local given = #args
+            local expected = #f.args
+            local min_arity = f.min_arity or set_min_arity(f)
+            for pass = 1, 3 do
+               if not tried[i] then
 
-         for i, f in ipairs(poly.types) do
-            if not tried[i] then
-               tried[i] = true
-               if #args < (#f.args or 0) then
-                  tried[i] = true
-                  local matched, errs = try_match_func_args(node, f, args, is_method, argdelta)
-                  if matched then
-                     return matched
-                  else
-                     revert_typeargs(f)
-                  end
-                  first_errs = first_errs or errs
-               end
-            end
-         end
+                  if (pass == 1 and given == expected) or
 
-         for i, f in ipairs(poly.types) do
-            if not tried[i] then
-               if f.args.is_va and #args > (#f.args or 0) then
-                  tried[i] = true
-                  local matched, errs = try_match_func_args(node, f, args, is_method, argdelta)
-                  if matched then
-                     return matched
-                  else
-                     revert_typeargs(f)
+                     (pass == 2 and given < expected and (lax or given >= min_arity)) or
+
+                     (pass == 3 and f.args.is_va and given > expected) then
+
+                     tried[i] = true
+                     local matched, errs = try_match_func_args(node, f, args, is_method, argdelta)
+                     if matched then
+                        return matched
+                     else
+                        revert_typeargs(f)
+                     end
+                     first_errs = first_errs or errs
                   end
-                  first_errs = first_errs or errs
                end
             end
          end
 
          if not first_errs then
+            local expects = {}
+            local given = #args
+            for _, f in ipairs(poly.types) do
+               table.insert(expects, function_args_arity_message(f, given))
+            end
             table.sort(expects)
             remove_sorted_duplicates(expects)
-            node_error(node, "wrong number of arguments (given " .. #args .. ", expects " .. table.concat(expects, " or ") .. ")")
+            node_error(node, "wrong number of arguments (given " .. given .. ", expects " .. table.concat(expects, " or ") .. ")")
          else
             for _, err in ipairs(first_errs) do
                table.insert(errors, err)
@@ -6149,7 +6222,7 @@ tl.type_check = function(ast, opts)
          for i, tt in ipairs(t.typevals) do
             add_var(nil, def.typeargs[i].typearg, tt)
          end
-         local ret = resolve_typevars(def, nil, t)
+         local ret = resolve_typevars(def, t)
          end_scope()
          return ret
       elseif t.typevals then
@@ -6677,7 +6750,6 @@ tl.type_check = function(ast, opts)
    end
 
    local function type_check_funcall(node, a, b, argdelta)
-      argdelta = argdelta or 0
       if node.e1.tk == "rawget" then
          if #b == 2 then
             local b1 = resolve_unary(b[1])
@@ -6960,9 +7032,9 @@ tl.type_check = function(ast, opts)
          before = function(node)
             end_scope()
             begin_scope()
-            local f = facts_not(node.parent_if.exp.known)
+            local f = facts_not(node.parent_if.exp.known, node)
             for e = 1, node.elseif_n - 1 do
-               f = facts_and(f, facts_not(node.parent_if.elseifs[e].exp.known), node)
+               f = facts_and(f, facts_not(node.parent_if.elseifs[e].exp.known, node), node)
             end
             apply_facts(node.exp, f)
          end,
@@ -6978,9 +7050,9 @@ tl.type_check = function(ast, opts)
          before = function(node)
             end_scope()
             begin_scope()
-            local f = facts_not(node.parent_if.exp.known)
+            local f = facts_not(node.parent_if.exp.known, node)
             for _, elseifnode in ipairs(node.parent_if.elseifs) do
-               f = facts_and(f, facts_not(elseifnode.exp.known), node)
+               f = facts_and(f, facts_not(elseifnode.exp.known, node), node)
             end
             apply_facts(node, f)
          end,
@@ -7493,7 +7565,7 @@ tl.type_check = function(ast, opts)
             if node.op.op == "and" then
                apply_facts(node, node.e1.known)
             elseif node.op.op == "or" then
-               apply_facts(node, facts_not(node.e1.known))
+               apply_facts(node, facts_not(node.e1.known, node))
             end
          end,
          after = function(node, children)
@@ -7513,7 +7585,7 @@ tl.type_check = function(ast, opts)
                ub = ub.def
             end
             if node.op.op == "@funcall" then
-               node.type = type_check_funcall(node, a, b)
+               node.type = type_check_funcall(node, a, b, 0)
             elseif node.op.op == "@index" then
                node.type = type_check_index(node, node.e2, a, b)
             elseif node.op.op == "as" then
@@ -7550,7 +7622,7 @@ tl.type_check = function(ast, opts)
             elseif node.op.op == ":" then
                node.type = match_record_key(node, node.e1.type, node.e2, orig_a)
             elseif node.op.op == "not" then
-               node.known = facts_not(node.e1.known)
+               node.known = facts_not(node.e1.known, node)
                node.type = BOOLEAN
             elseif node.op.op == "and" then
                node.known = facts_and(node.e1.known, node.e2.known, node)
@@ -7559,7 +7631,7 @@ tl.type_check = function(ast, opts)
                node.known = nil
                node.type = resolve_tuple(a)
             elseif node.op.op == "or" and is_a(ub, ua) then
-               node.known = facts_or(node.e1.known, node.e2.known)
+               node.known = facts_or(node.e1.known, node.e2.known, node)
                node.type = resolve_tuple(a)
             elseif node.op.op == "or" and b.typename == "nil" then
                node.known = nil
@@ -7607,7 +7679,7 @@ tl.type_check = function(ast, opts)
 
             elseif node.op.arity == 2 and binop_types[node.op.op] then
                if node.op.op == "or" then
-                  node.known = facts_or(node.e1.known, node.e2.known)
+                  node.known = facts_or(node.e1.known, node.e2.known, node)
                end
 
                a = ua
@@ -7687,6 +7759,7 @@ tl.type_check = function(ast, opts)
             end
             check_typevars(node, t)
             node.type = t
+            node.type.opt = node.opt
             add_var(node, node.tk, t).is_func_arg = true
             return node.type
          end,
@@ -7727,17 +7800,15 @@ tl.type_check = function(ast, opts)
    visit_node.cbs["boolean"] = visit_node.cbs["string"]
    visit_node.cbs["..."] = visit_node.cbs["variable"]
 
-   visit_node.after = {
-      after = function(node, _children)
-         if type(node.type) ~= "table" then
-            error(node.kind .. " did not produce a type")
-         end
-         if type(node.type.typename) ~= "string" then
-            error(node.kind .. " type does not have a typename")
-         end
-         return node.type
-      end,
-   }
+   visit_node.after_each = function(node, _children)
+      if type(node.type) ~= "table" then
+         error(node.kind .. " did not produce a type")
+      end
+      if type(node.type.typename) ~= "string" then
+         error(node.kind .. " type does not have a typename")
+      end
+      return node.type
+   end
 
    local visit_type = {
       cbs = {
@@ -7747,7 +7818,7 @@ tl.type_check = function(ast, opts)
             end,
          },
          ["function"] = {
-            before = function(_typ, _children)
+            before = function(_typ)
                begin_scope()
             end,
             after = function(typ, _children)
@@ -7756,7 +7827,7 @@ tl.type_check = function(ast, opts)
             end,
          },
          ["record"] = {
-            before = function(typ, _children)
+            before = function(typ)
                begin_scope()
                for name, typ2 in pairs(typ.fields) do
                   if typ2.typename == "typetype" then
@@ -7821,22 +7892,20 @@ tl.type_check = function(ast, opts)
             end,
          },
       },
-      after = {
-         after = function(typ, _children, ret)
-            if type(ret) ~= "table" then
-               error(typ.typename .. " did not produce a type")
-            end
-            if type(ret.typename) ~= "string" then
-               error("type node does not have a typename")
-            end
-            return ret
-         end,
-      },
+      after_each = function(typ, _children, ret)
+         if type(ret) ~= "table" then
+            error(typ.typename .. " did not produce a type")
+         end
+         if type(ret.typename) ~= "string" then
+            error("type node does not have a typename")
+         end
+         return ret
+      end,
    }
 
    if not opts.run_internal_compiler_checks then
-      visit_node.after = nil
-      visit_type.after = nil
+      visit_node.after_each = nil
+      visit_type.after_each = nil
    end
 
    visit_type.cbs["tupletable"] = visit_type.cbs["string"]

@@ -15,7 +15,8 @@ describe("doublequote string", function()
       msg = msg:gsub("\n\t%(tail call%): %?", "\000")
       msg = msg:gsub("\n\t%.%.%.\n", "\001\n")
       msg = msg:gsub("\n\t%.%.%.$", "\001")
-      msg = msg:gsub("(%z+)\001(%z+)", function(some: string, other: string): string
+      -- FIXME ARITY the callback for gsub is declared as vararg, so the string arguments need to be optional...
+      msg = msg:gsub("(%z+)\001(%z+)", function(some?: string, other?: string): string
          return "\n\t(..."..#some+#other.." tail call(s)...)"
       end)
    ]])
