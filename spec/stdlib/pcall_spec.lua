@@ -2,7 +2,7 @@ local tl = require("tl")
 local util = require("spec.util")
 
 describe("pcall", function()
-   it("can't pcall nothing", util.check_type_error([[
+   pending("can't pcall nothing", util.check_type_error([[
       local pok = pcall()
    ]], {
       { msg = "given 0, expects at least 1" }
@@ -14,10 +14,26 @@ describe("pcall", function()
 
       local pok = pcall(f, 123, "hello")
    ]], {
-      { msg = "argument 2: got integer, expected string" }
+      { msg = "argument 2: got integer, expected string" },
+      { msg = "argument 3: got string \"hello\", expected number" },
    }))
 
+   it("pcalls through my_pcall", util.check [[
+      local my_pcall: function<A..., B...>(function(A):(B), A): boolean, B
+
+      local function f(s: string): number
+         return 123
+      end
+      local a, b, d = pcall(my_pcall, f, "num")
+
+      assert(a == true)
+      assert(b == true)
+      assert(d == 123)
+   ]])
+
    it("pcalls through pcall", util.check [[
+      local my_pcall: function<A..., B...>(function(A):(B), A): boolean, B
+
       local function f(s: string): number
          return 123
       end

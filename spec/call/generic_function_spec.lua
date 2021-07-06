@@ -1,17 +1,21 @@
 local util = require("spec.util")
 
 describe("generic function", function()
-   it("argument list cannot be empty on declaration", util.check_syntax_error([[
-      local type ParseItem = function<>(number): T
-   ]], {
-      { msg = "type argument list cannot be empty" }
-   }))
+   it("argument list can be empty on declaration", util.check [[
+      local type ParseItem = function<>(number): number
 
-   it("argument list cannot be empty on instance", util.check_syntax_error([[
-      local x: T<> = true
-   ]], {
-      { msg = "type argument list cannot be empty" }
-   }))
+      local x: ParseItem = function(i: number): number
+         return i
+      end
+   ]])
+
+   it("argument list can be empty on instance", util.check [[
+      local type ParseItem = function<>(number): number
+
+      local x: ParseItem<> = function(i: number): number
+         return i
+      end
+   ]])
 
    it("can declare a generic function type", util.check [[
       local type ParseItem = function<T>(number): T
@@ -440,6 +444,27 @@ describe("generic function", function()
       end
       local _tbl_unpack = my_unpack or table.unpack
       local _map: {string:number} = setmetatable(assert({}), { __mode = "k" })
+   ]])
+
+   it("nested uses of generic functions using the same names for type variables don't cause conflicts", util.check [[
+      local function pcall1<A, B>(f: function(A):(B), a: A): boolean, B
+         return true, f(a)
+      end
+
+      local function pcall2<A, A2, B, B2>(f: function(A, A2):(B, B2), a: A, a2: A2): boolean, B, B2
+         return true, f(a, a2)
+      end
+
+      local function greet(s: string): number
+         print(s .. "!")
+         return #s
+      end
+
+      local pok1, pok2, msg = pcall2(pcall1, greet, "hello")
+
+      print(pok1)
+      print(pok2)
+      print(msg)
    ]])
 end)
 

@@ -101,11 +101,16 @@ precedence, see below.
 
 *  retlist ::= ‘(’ [typelist] [‘...’] ‘)’ | typelist [‘...’]
 
-*  typeargs ::= ‘<’ Name {‘,’ Name } ‘>’
+*  typeargs ::= ‘<’ [typearglist] ‘>’
+
+*  typearglist ::= Name {‘,’ Name } {‘,’ Name ‘...’] } |
+*      Name ‘...’ {‘,’ Name ‘...’ }
+
+*  typevals ::= ‘<’ [typelist] ‘>’
 
 *  newtype ::= ‘record’ recordbody | ‘enum’ enumbody | type
 
-*  recordbody ::= [typeargs] {recordentry} ‘end’
+*  recordbody ::= [typevals] {recordentry} ‘end’
 
 *  recordentry ::= ‘userdata’ | ‘{’ type ‘}’ |
 *      Name ‘=’ newtype | [‘metamethod’] recordkey ‘:’ type
@@ -114,7 +119,7 @@ precedence, see below.
 
 *  enumbody ::= {LiteralString} ‘end’
 
-*  functiontype ::= ‘function’ [typeargs] ‘(’ partypelist ‘)’ [‘:’ retlist]
+*  functiontype ::= ‘function’ [typevals] ‘(’ [partypelist] ‘)’ [‘:’ retlist]
 
 *  partypelist ::= partype {‘,’ partype}
 

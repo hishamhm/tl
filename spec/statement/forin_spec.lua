@@ -158,6 +158,17 @@ describe("forin", function()
       { x = 14, y = 5, msg = "too many variables for this iterator; it produces 1 value" }
    }))
 
+   it("catches when too many values are passed", util.check_type_error([[
+      local function it(): function(): string, number
+         return nil
+      end
+
+      for k, v, z in it() do
+      end
+   ]], {
+      { x = 17, y = 5, msg = "too many variables for this iterator; it produces 2 values" }
+   }))
+
    it("catches when too many values are passed, smart behavior about tuples", util.check_type_error([[
       local record R
          fields: function({number, nil}, string): (function(): string)

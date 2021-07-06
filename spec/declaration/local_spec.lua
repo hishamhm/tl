@@ -126,7 +126,7 @@ describe("local", function()
       it("catches unknown types", util.check_type_error([[
          local type MyType = UnknownType
       ]], {
-         { msg = "UnknownType is not a type" }
+         { msg = "unknown type UnknownType" }
       }))
 
       it("nominal types can take type arguments", util.check [[
