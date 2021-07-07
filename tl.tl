@@ -4014,6 +4014,7 @@ local MAP_OF_ALPHA_TO_BETA = a_type { typename = "map", keys = ALPHA, values = B
 local NOMINAL_METATABLE_OF_ALPHA = a_type { typename = "nominal", names = {"metatable"}, typevals = { ALPHA } }
 
 local ARRAY_OF_STRING = a_type { typename = "array", elements = STRING }
+local ARRAY_OF_STRING_OR_NUMBER = a_type { typename = "array", elements = UNION { STRING, NUMBER } }
 
 local FUNCTION = a_type { typename = "function", args = VARARG { ANY }, rets = VARARG { ANY } }
 
@@ -5116,7 +5117,7 @@ local function init_globals(lax: boolean): {string:Variable}, {string:Type}
       ["table"] = a_type {
          typename = "record",
          fields = {
-            ["concat"] = a_type { typename = "function", args = TUPLE { ARRAY_OF_STRING, OPT_STRING, OPT_NUMBER, OPT_NUMBER }, rets = TUPLE { STRING } },
+            ["concat"] = a_type { typename = "function", args = TUPLE { ARRAY_OF_STRING_OR_NUMBER, OPT_STRING, OPT_NUMBER, OPT_NUMBER }, rets = TUPLE { STRING } },
             ["insert"] = a_type {
                typename = "poly",
                types = {

@@ -12,4 +12,11 @@ describe("table", function()
       ]])
    end)
 
+   describe("concat", function()
+      it("can concat a mixed list of strings and numbers", util.check [[
+         local t = { "a", 1, "b", 2 }
+         print(table.concat(t))
+      ]])
+   end)
+
 end)
