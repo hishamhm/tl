@@ -937,12 +937,6 @@ help tl catch errors: tl can check the types of calls from Lua to functions
 declared as Teal modules, and will report errors as long as the input arguments
 are not of type unknown.
 
-You can also create declaration files to annotate the types of third-party Lua
-modules, including C Lua modules. If you create a file with the .d.tl
-extension, that will be used as a source of type information when type
-checking with `tl check`, even though the real Lua module will be loaded
-instead when requiring the module from Lua or `tl run`.
-
 Having unknown variables in a Lua program is not an error, but it may hide
 errors. Running `tl check` on a Lua file will report every unknown variable in
 a separate list from errors. This allows you to see which parts of your
@@ -953,3 +947,90 @@ Note that even though adding type annotations to .lua files makes it invalid
 Lua, you can still do so and load them from the Lua VM once the Teal package
 loader is installed by calling tl.loader().
 
+
+### Type definitions for third party libraries
+
+You can also create declaration files to annotate the types of third-party Lua
+modules, including C Lua modules. To do so, create a file with the .d.tl
+extension and require it as normal, i.e. `require("minetest")`.
+
+Types defined in this module will will be used as a source of type information 
+checking with `tl check`, even though the real Lua module will be loaded
+instead when requiring the module from Lua or `tl run`.
+
+If the third party library is "globally available", i.e. you do not explicitly
+`require` it, you can inject the types without affecting your generated code
+with a `tlconfig.lua`:
+
+```lua
+return {
+    preload_modules = {
+        "minetest" -- Execute the equivalent of require('minetest') before type-checking the tl script(s)
+    }
+}
+```
+
+#### Visibility
+
+It should be noted that local references in type definition files (or any files
+containing types for that matter) are not available in the requiring module.
+
+This means that constructs like:
+
+```lua
+local MyPointType = record
+    x :number
+    y :number
+end
+
+local MyCompositeType = record
+    center: MyPointType
+end
+
+return {
+    MyPointType = MyPointType,
+    MyCompositeType = MyCompositeType,
+}
+```
+
+will give errors when accessing `MyCompositeType::center`, as `MyPointType` is not
+visible.
+
+There are two ways to define these types:
+
+##### Composite Types
+
+```lua
+local MyCompositeType = record
+    MyPointType = record
+        x :number
+        y :number
+    end
+
+    center :MyPointType
+    -- insert more stuff here
+end
+
+return MyCompositeType
+```
+
+This will mean that references to `MyPointType` must be qualified (or locally declared) as
+`MyCompositeType.MyPointType`.
+
+##### Global Types
+
+While perhaps discouraged in general, for types that are provided as part of the
+execution environment it may be more hygeinic to declare them as global.
+
+```lua
+global MyPointType = record
+    x :number
+    y :number
+end
+
+global MyCompositeType = record
+    center: MyPointType
+end
+```
+
+These can now be used unqualified in any file that requires them.
